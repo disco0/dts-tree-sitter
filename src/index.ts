@@ -1,23 +1,123 @@
 import * as fs from "fs";
 import * as pathlib from "path";
 
-interface NodeTypeRef {
-    type: string;
-    named: boolean;
-    isError?: boolean;
-}
-interface NodeTypeEntry extends NodeTypeRef {
-    subtypes?: NodeTypeRef[];
-    fields?: Record<string, NodeTypeChildren>;
-    children?: NodeTypeChildren;
-}
-interface NodeTypeChildren {
-    multiple: boolean;
-    required: boolean;
-    types: NodeTypeRef[];
+//#region dedent
+
+/**
+ * @NOTE This can all be removed if dedent package is added to dependencies
+ */
+
+export namespace is
+{
+    function regex(obj: unknown): obj is RegExp
+    {
+        return !!obj && obj instanceof RegExp;
+    }
+
+    export function String(obj: unknown): obj is string
+    {
+        return typeof obj === 'string'
+    }
+
+    export function StringWithChar(obj: unknown): obj is string
+    {
+        return is.String(obj) && obj.length > 0
+    }
+
+    export const RegExp = regex;
 }
 
-class Printer {
+function indentRegexFromRawIndent(whitespaceString: string): RegExp
+{
+    return new RegExp(String.raw`^${whitespaceString.replace(/\t/g, String.raw`\t`)}`, "")
+}
+
+function dedent(str: string, indent?: string | RegExp): string
+{
+    let indentPattern: RegExp | undefined = undefined;
+
+    // (If no argument passed)
+    if(typeof indent === 'undefined')
+    {
+        const indentRegex = /^(?<indent>[ \t]+)/;
+        let firstIndent: string | undefined;
+        // Iterate through lines until capture group result, return true to stop
+        str.split(/\r?\n/gm).some(line =>
+            (({indent}: Partial<Record<'indent', string | undefined>>) =>
+                is.StringWithChar(indent)
+                    ? (firstIndent = indent, true)
+                    : false
+            )(indentRegex.exec(line)?.groups ?? {})
+        )
+        if(firstIndent === undefined)
+        {
+            throw new Error('TODO: Handle failure to find first indent')
+        }
+
+        indentPattern = indentRegexFromRawIndent(firstIndent)
+    }
+    else if(is.RegExp(indent))
+    {
+        indentPattern = indent;
+    }
+    else if(is.String(indent))
+    {
+        if(is.StringWithChar(indent))
+        {
+            if(/^([^\n])(?:\1)*$/.test(indent))
+            {
+                indentPattern = new RegExp(String.raw`^(?:${indent[0]}){0,${indent.length}}`, "");
+            }
+            else
+            {
+                throw new Error(`Invalid indent parameter: Malformed string content (Input: "${str}")`);
+            }
+        }
+    }
+    else
+    {
+        throw new Error(`Fall through on conditial block. (Input: "${str}")`)
+    }
+
+    if(is.RegExp(indentPattern))
+        return str.split(/\n/gm).map(line => line.replace(indentPattern!, '')).join('\n');
+    else
+        return str
+}
+
+//#endregion dedent
+
+export namespace NodeType
+{
+    export interface Ref {
+        type: string;
+        named: boolean;
+        isError?: boolean;
+    }
+
+    export interface Entry extends NodeType.Ref {
+        subtypes?: NodeType.Ref[];
+        fields?: Record<string, NodeType.Children>;
+        children?: NodeType.Children;
+    }
+
+    export interface Children {
+        multiple: boolean;
+        required: boolean;
+        types: NodeType.Ref[];
+    }
+}
+
+declare namespace Printer
+{
+    export interface PrintLnOptions
+    {
+        dedent?: boolean
+    }
+}
+
+export class Printer
+{
     private indentation = '';
 
     indent(): this {
@@ -28,11 +128,23 @@ class Printer {
         this.indentation = this.indentation.substring(0, this.indentation.length - 2);
         return this;
     }
-    println(str?: string): this {
+    println(str?: string, options: Printer.PrintLnOptions = {}): this
+    {
         if (str == null) {
             console.log();
         } else {
-            console.log(this.indentation + str);
+            // Sanitize options parameter (probably unnecessary after getting this working)
+            options = typeof options === 'object' ? options : { };
+
+            // Dedent option: apply non-instance dedent function and then indent each line of `str`
+            if(options.dedent === true)
+            {
+                console.log(Printer.IndentLines(str, this.indentation))
+            }
+            else
+            {
+                console.log(this.indentation + str);
+            }
         }
         return this;
     }
@@ -61,13 +173,28 @@ class Printer {
         }
         return this;
     }
+
+    /**
+     * Apply string `indentation` as indent to each line of string `str`
+     */
+    static IndentLines(str: string, indentation: string): string
+    {
+        return str.replace(/^/gm, indentation);
+    }
 }
 
-function isIdentifier(str: string) {
-    return /^[a-z$_][a-z0-9$_]*$/i.test(str);
+// (Intentially separate from other `is` namespace declaration)
+export namespace is
+{
+    // @NOTE: Not sure if matching any ECMAScript identifier would be ideal?
+    //        /^[$_\p{ID_Start}][$_\u200C\u200D\p{ID_Continue}]*$/u
+    export function Identifier(str: string) : boolean
+    {
+        return /^[a-z$_][a-z0-9$_]*$/i.test(str);
+    }
 }
 
-function mangleNameToIdentifier(str: string) {
+export function mangleNameToIdentifier(str: string) {
     let sb = '$';
     for (let i = 0; i < str.length; ++i) {
         let char = str.charAt(i);
@@ -80,122 +207,129 @@ function mangleNameToIdentifier(str: string) {
     return sb;
 }
 
-function toCapitalCase(str: string) {
+export function toCapitalCase(str: string) {
     return str.replace(/^[a-z]/, t => t.toUpperCase())
               .replace(/_[a-zA-Z]/g, t => t.substring(1).toUpperCase())
 }
 
-function getTypePrefixFromString(str: string) {
-    return isIdentifier(str) ? toCapitalCase(str) : mangleNameToIdentifier(str);
-}
-
-function getTypeNameFromString(str: string) {
-    return getTypePrefixFromString(str) + 'Node';
-}
-
-function getSyntaxKindFromString(str: string) {
-    return getTypePrefixFromString(str);
-}
-
-function getTypeExprFromRef(ref: NodeTypeRef, index: IndexedData) {
-    if (ref.isError) {
-        return 'ErrorNode';
+export namespace extract
+{
+    export function TypePrefix(str: string) {
+        return is.Identifier(str) ? toCapitalCase(str) : mangleNameToIdentifier(str);
     }
-    if (!ref.named) {
-        let name = index.typeNames.get(ref.type);
-        let arg = name != null ? `SyntaxType.${name}` : JSON.stringify(ref.type);
-        return `UnnamedNode<${arg}>`;
+
+    export function TypeName(str: string) {
+        return extract.TypePrefix(str) + 'Node';
     }
-    return getTypeNameFromString(ref.type);
+
+    export function SyntaxKind(str: string) {
+        return extract.TypePrefix(str);
+    }
+
+    export function TypeExprFromRef(ref: NodeType.Ref, index: IndexedData) {
+        if (ref.isError) {
+            return 'ErrorNode';
+        }
+        if (!ref.named) {
+            let name = index.typeNames.get(ref.type);
+            let arg = name != null ? `SyntaxType.${name}` : JSON.stringify(ref.type);
+            return `UnnamedNode<${arg}>`;
+        }
+        return extract.TypeName(ref.type);
+    }
 }
 
-interface IndexedData {
+export interface IndexedData {
     typeNames: Map<string, string>;
 }
 
-function buildIndex(json: NodeTypeEntry[]): IndexedData {
+export function buildIndex(json: NodeType.Entry[]): IndexedData {
     let typeNames = new Map<string, string>();
     for (let entry of json) {
         if (entry.named) {
-            let name = getSyntaxKindFromString(entry.type);
+            let name = extract.SyntaxKind(entry.type);
             typeNames.set(entry.type, name);
         }
     }
     return { typeNames };
 }
+//#region generate
 
-function generatePreamble(json: NodeTypeEntry[], printer: Printer) {
-    printer.println(`
-interface NamedNodeBase extends SyntaxNodeBase {
-    isNamed: true;
-}
+export namespace generate
+{
 
-/** An unnamed node with the given type string. */
-export interface UnnamedNode<T extends string = string> extends SyntaxNodeBase {
-  type: T;
-  isNamed: false;
-}
+    export function Preamble(json: NodeType.Entry[], printer: Printer) {
+        printer.println(`
+            interface NamedNodeBase extends SyntaxNodeBase {
+                isNamed: true;
+            }
 
-type PickNamedType<Node, T extends string> = Node extends { type: T; isNamed: true } ? Node : never;
+            /** An unnamed node with the given type string. */
+            export interface UnnamedNode<T extends string = string> extends SyntaxNodeBase {
+            type: T;
+            isNamed: false;
+            }
 
-type PickType<Node, T extends string> = Node extends { type: T } ? Node : never;
+            type PickNamedType<Node, T extends string> = Node extends { type: T; isNamed: true } ? Node : never;
 
-/** A named node with the given \`type\` string. */
-export type NamedNode<T extends SyntaxType = SyntaxType> = PickNamedType<SyntaxNode, T>;
+            type PickType<Node, T extends string> = Node extends { type: T } ? Node : never;
 
-/**
- * A node with the given \`type\` string.
- *
- * Note that this matches both named and unnamed nodes. Use \`NamedNode<T>\` to pick only named nodes.
- */
-export type NodeOfType<T extends string> = PickType<SyntaxNode, T>;
+            /** A named node with the given \`type\` string. */
+            export type NamedNode<T extends SyntaxType = SyntaxType> = PickNamedType<SyntaxNode, T>;
 
-interface TreeCursorOfType<S extends string, T extends SyntaxNodeBase> {
-  nodeType: S;
-  currentNode: T;
-}
+            /**
+             * A node with the given \`type\` string.
+             *
+             * Note that this matches both named and unnamed nodes. Use \`NamedNode<T>\` to pick only named nodes.
+             */
+            export type NodeOfType<T extends string> = PickType<SyntaxNode, T>;
 
-type TreeCursorRecord = { [K in TypeString]: TreeCursorOfType<K, NodeOfType<K>> };
+            interface TreeCursorOfType<S extends string, T extends SyntaxNodeBase> {
+            nodeType: S;
+            currentNode: T;
+            }
 
-/**
- * A tree cursor whose \`nodeType\` correlates with \`currentNode\`.
- *
- * The typing becomes invalid once the underlying cursor is mutated.
- *
- * The intention is to cast a \`TreeCursor\` to \`TypedTreeCursor\` before
- * switching on \`nodeType\`.
- *
- * For example:
- * \`\`\`ts
- * let cursor = root.walk();
- * while (cursor.gotoNextSibling()) {
- *   const c = cursor as TypedTreeCursor;
- *   switch (c.nodeType) {
- *     case SyntaxType.Foo: {
- *       let node = c.currentNode; // Typed as FooNode.
- *       break;
- *     }
- *   }
- * }
- * \`\`\`
- */
-export type TypedTreeCursor = TreeCursorRecord[keyof TreeCursorRecord];
+            type TreeCursorRecord = { [K in TypeString]: TreeCursorOfType<K, NodeOfType<K>> };
 
-export interface ErrorNode extends NamedNodeBase {
-    type: SyntaxType.ERROR;
-    hasError(): true;
-}
-`);
-}
+            /**
+             * A tree cursor whose \`nodeType\` correlates with \`currentNode\`.
+             *
+             * The typing becomes invalid once the underlying cursor is mutated.
+             *
+             * The intention is to cast a \`TreeCursor\` to \`TypedTreeCursor\` before
+             * switching on \`nodeType\`.
+             *
+             * For example:
+             * \`\`\`ts
+             * let cursor = root.walk();
+             * while (cursor.gotoNextSibling()) {
+             *   const c = cursor as TypedTreeCursor;
+             *   switch (c.nodeType) {
+             *     case SyntaxType.Foo: {
+             *       let node = c.currentNode; // Typed as FooNode.
+             *       break;
+             *     }
+             *   }
+             * }
+             * \`\`\`
+             */
+            export type TypedTreeCursor = TreeCursorRecord[keyof TreeCursorRecord];
 
-function generateTypeEnum(json: NodeTypeEntry[], { typeNames }: IndexedData, printer: Printer) {
+            export interface ErrorNode extends NamedNodeBase {
+                type: SyntaxType.ERROR;
+                hasError(): true;
+            }
+        `, { dedent: true });
+    }
+
+export function TypeEnum(json: NodeType.Entry[], { typeNames }: IndexedData, printer: Printer) {
     printer.
         println('export const enum SyntaxType {')
         .indent()
         .println('ERROR = "ERROR",')
         .forEach(json, entry => {
             if (entry.named && (entry.subtypes == null || entry.subtypes.length === 0)) {
-                let name = getSyntaxKindFromString(entry.type);
+                let name = extract.SyntaxKind(entry.type);
                 printer.println(`${name} = ${JSON.stringify(entry.type)},`);
             }
         })
@@ -221,26 +355,26 @@ function generateTypeEnum(json: NodeTypeEntry[], { typeNames }: IndexedData, pri
         .println();
 }
 
-function generateNamedDeclaration(entry: NodeTypeEntry, index: IndexedData, printer: Printer) {
+export function NamedDeclaration(entry: NodeType.Entry, index: IndexedData, printer: Printer) {
     if (!entry.named)
         return;
     if (entry.subtypes != null && entry.subtypes.length > 0) {
-        generateUnionFromEntry(entry, index, printer);
+        generate.UnionFromEntry(entry, index, printer);
     } else {
-        generateInterfaceFromEntry(entry, index, printer);
+        generate.InterfaceFromEntry(entry, index, printer);
     }
 }
 
-function generateInterfaceFromEntry(entry: NodeTypeEntry, index: IndexedData, printer: Printer) {
-    let kind = getSyntaxKindFromString(entry.type);
-    let name = getTypeNameFromString(entry.type);
+export function InterfaceFromEntry(entry: NodeType.Entry, index: IndexedData, printer: Printer) {
+    let kind = extract.SyntaxKind(entry.type);
+    let name = extract.TypeName(entry.type);
     printer
         .println(`export interface ${name} extends NamedNodeBase {`)
         .indent()
         .println(`type: SyntaxType.${kind};`)
         .forEachInRecord(entry.fields, (field, children) => {
             let fieldName = field + 'Node';
-            let type = children.types.map(t => getTypeExprFromRef(t, index)).join(' | ');
+            let type = children.types.map(t => extract.TypeExprFromRef(t, index)).join(' | ');
             if (type === '') {
                 type = 'UnnamedNode';
             }
@@ -259,28 +393,28 @@ function generateInterfaceFromEntry(entry: NodeTypeEntry, index: IndexedData, pr
         .println();
 }
 
-function generateUnionFromEntry(entry: NodeTypeEntry, index: IndexedData, printer: Printer) {
-    generateUnion(getTypeNameFromString(entry.type), entry.subtypes!, index, printer);
+export function UnionFromEntry(entry: NodeType.Entry, index: IndexedData, printer: Printer) {
+    generate.Union(extract.TypeName(entry.type), entry.subtypes!, index, printer);
 }
 
-function generateRootUnion(json: NodeTypeEntry[], index: IndexedData, printer: Printer) {
-    let errorType: NodeTypeRef = { type: 'ERROR', named: true, isError: true };
-    generateUnion('SyntaxNode', [...json, errorType], index, printer);
+export function RootUnion(json: NodeType.Entry[], index: IndexedData, printer: Printer) {
+    let errorType: NodeType.Ref = { type: 'ERROR', named: true, isError: true };
+    generate.Union('SyntaxNode', [...json, errorType], index, printer);
 }
 
-function generateUnion(name: string, members: NodeTypeRef[], index: IndexedData, printer: Printer) {
+export function Union(name: string, members: NodeType.Ref[], index: IndexedData, printer: Printer) {
     printer
         .println(`export type ${name} = `)
         .indent()
         .forEach(members, ref => {
-            printer.println('| ' + getTypeExprFromRef(ref, index))
+            printer.println('| ' + extract.TypeExprFromRef(ref, index))
         })
         .println(';')
         .deindent()
         .println();
 }
 
-function generateModifiedTreeSitterDts(json: NodeTypeEntry[], dtsText: string, printer: Printer) {
+export function ModifiedTreeSitterDts(json: NodeType.Entry[], dtsText: string, printer: Printer) {
     let text = dtsText
         .replace(/declare module ['"]tree-sitter['"] {(.*)}/s, (str, p1) => p1.replace(/^  /gm, ''))
         .replace('export = Parser', '')
@@ -298,13 +432,16 @@ function generateModifiedTreeSitterDts(json: NodeTypeEntry[], dtsText: string, p
     printer.println(text);
 }
 
-const usageText = `
+}
+//#endregion generate
+
+export const usageText = `
   Usage: dts-tree-sitter INPUT > OUTPUT.d.ts
 
-  Generates a .d.ts file to stdout.
-`;
+  generate.s a .d.ts file to stdout.
+export `;
 
-function fileExists(file: string) {
+export function fileExists(file: string) {
     try {
         return fs.statSync(file).isFile();
     } catch (e) {
@@ -312,7 +449,7 @@ function fileExists(file: string) {
     }
 }
 
-function getLookupLocations(input: string) {
+export function getLookupLocations(input: string) {
     let result = [
         input,
         pathlib.join(input, 'node-types.json'),
@@ -324,20 +461,20 @@ function getLookupLocations(input: string) {
     return result;
 }
 
-function getTreeSitterDts() {
+export function getTreeSitterDts() {
     let entryPoint = require.resolve('tree-sitter');
     let packageDir = pathlib.dirname(entryPoint);
     let file = pathlib.join(packageDir, 'tree-sitter.d.ts');
     return fs.readFileSync(file, 'utf8');
 }
 
-function main() {
+export function main() {
     let args = process.argv.slice(2);
     if (args.length !== 1) {
         console.error(usageText);
         process.exit(1);
     }
-    let locations = getLookupLocations(args[0]); 
+    let locations = getLookupLocations(args[0]);
     let filename = locations.find(fileExists);
     let treeSitterDtsText = getTreeSitterDts();
     if (filename == null) {
@@ -345,14 +482,12 @@ function main() {
         locations.forEach(l => console.log(`  ${l}`));
         process.exit(1);
     }
-    let json = JSON.parse(fs.readFileSync(filename, 'utf8')) as NodeTypeEntry[];
+    let json = JSON.parse(fs.readFileSync(filename, 'utf8')) as NodeType.Entry[];
     let index = buildIndex(json);
     let printer = new Printer();
-    generateModifiedTreeSitterDts(json, treeSitterDtsText, printer);
-    generatePreamble(json, printer);
-    generateTypeEnum(json, index, printer);
-    generateRootUnion(json, index, printer);
-    printer.forEach(json, t => generateNamedDeclaration(t, index, printer));
+    generate.ModifiedTreeSitterDts(json, treeSitterDtsText, printer);
+    generate.Preamble(json, printer);
+    generate.TypeEnum(json, index, printer);
+    generate.RootUnion(json, index, printer);
+    printer.forEach(json, t => generate.NamedDeclaration(t, index, printer));
 }
-
-main();
