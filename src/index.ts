@@ -42,13 +42,17 @@ function dedent(str: string, indent?: string | RegExp): string
         const indentRegex = /^(?<indent>[ \t]+)/;
         let firstIndent: string | undefined;
         // Iterate through lines until capture group result, return true to stop
-        str.split(/\r?\n/gm).some(line =>
-            (({indent}: Partial<Record<'indent', string | undefined>>) =>
-                is.StringWithChar(indent)
-                    ? (firstIndent = indent, true)
-                    : false
-            )(indentRegex.exec(line)?.groups ?? {})
-        )
+        for(const line of str.split(/\r?\n/gm))
+        {
+            const groups = indentRegex.exec(line)?.groups ?? {};
+
+            if(is.StringWithChar(groups.indent))
+            {
+                firstIndent = indent
+                break
+            }
+        }
+
         if(firstIndent === undefined)
         {
             throw new Error('TODO: Handle failure to find first indent')
@@ -80,9 +84,10 @@ function dedent(str: string, indent?: string | RegExp): string
     }
 
     if(is.RegExp(indentPattern))
-        return str.split(/\n/gm).map(line => line.replace(indentPattern!, '')).join('\n');
+        return str.replace(/(?<![\s\S])\n+/m, '').split(/\n/gm).map(line => line.replace(indentPattern!, '')).join('\n');
     else
-        return str
+        throw new Error('Failed to resolve an indent pattern regex.')
+        // return str
 }
 
 //#endregion dedent
@@ -319,118 +324,118 @@ export namespace generate
                 type: SyntaxType.ERROR;
                 hasError(): true;
             }
-        `, { dedent: true });
+        `.replace(/^[ ]{0,12}/gm, ''));
     }
 
-export function TypeEnum(json: NodeType.Entry[], { typeNames }: IndexedData, printer: Printer) {
-    printer.
-        println('export const enum SyntaxType {')
-        .indent()
-        .println('ERROR = "ERROR",')
-        .forEach(json, entry => {
-            if (entry.named && (entry.subtypes == null || entry.subtypes.length === 0)) {
-                let name = extract.SyntaxKind(entry.type);
-                printer.println(`${name} = ${JSON.stringify(entry.type)},`);
-            }
-        })
-        .deindent()
-        .println('}')
-        .println()
-        .println('export type UnnamedType =')
-        .indent()
-        .forEach(json, entry => {
-            if (!entry.named) {
-                let name = typeNames.get(entry.type);
-                if (name != null) {
-                    printer.println(`| SyntaxType.${name} // both named and unnamed`);
-                } else {
-                    printer.println(`| ${JSON.stringify(entry.type)}`);
+    export function TypeEnum(json: NodeType.Entry[], { typeNames }: IndexedData, printer: Printer) {
+        printer.
+            println('export const enum SyntaxType {')
+            .indent()
+            .println('ERROR = "ERROR",')
+            .forEach(json, entry => {
+                if (entry.named && (entry.subtypes == null || entry.subtypes.length === 0)) {
+                    let name = extract.SyntaxKind(entry.type);
+                    printer.println(`${name} = ${JSON.stringify(entry.type)},`);
                 }
-            }
-        })
-        .println(';')
-        .deindent()
-        .println()
-        .println('export type TypeString = SyntaxType | UnnamedType;')
-        .println();
-}
-
-export function NamedDeclaration(entry: NodeType.Entry, index: IndexedData, printer: Printer) {
-    if (!entry.named)
-        return;
-    if (entry.subtypes != null && entry.subtypes.length > 0) {
-        generate.UnionFromEntry(entry, index, printer);
-    } else {
-        generate.InterfaceFromEntry(entry, index, printer);
+            })
+            .deindent()
+            .println('}')
+            .println()
+            .println('export type UnnamedType =')
+            .indent()
+            .forEach(json, entry => {
+                if (!entry.named) {
+                    let name = typeNames.get(entry.type);
+                    if (name != null) {
+                        printer.println(`| SyntaxType.${name} // both named and unnamed`);
+                    } else {
+                        printer.println(`| ${JSON.stringify(entry.type)}`);
+                    }
+                }
+            })
+            .println(';')
+            .deindent()
+            .println()
+            .println('export type TypeString = SyntaxType | UnnamedType;')
+            .println();
     }
-}
 
-export function InterfaceFromEntry(entry: NodeType.Entry, index: IndexedData, printer: Printer) {
-    let kind = extract.SyntaxKind(entry.type);
-    let name = extract.TypeName(entry.type);
-    printer
-        .println(`export interface ${name} extends NamedNodeBase {`)
-        .indent()
-        .println(`type: SyntaxType.${kind};`)
-        .forEachInRecord(entry.fields, (field, children) => {
-            let fieldName = field + 'Node';
-            let type = children.types.map(t => extract.TypeExprFromRef(t, index)).join(' | ');
-            if (type === '') {
-                type = 'UnnamedNode';
-            }
-            if (children.multiple) {
-                if (children.types.length > 1) {
-                    type = '(' + type + ')';
+    export function NamedDeclaration(entry: NodeType.Entry, index: IndexedData, printer: Printer) {
+        if (!entry.named)
+            return;
+        if (entry.subtypes != null && entry.subtypes.length > 0) {
+            generate.UnionFromEntry(entry, index, printer);
+        } else {
+            generate.InterfaceFromEntry(entry, index, printer);
+        }
+    }
+
+    export function InterfaceFromEntry(entry: NodeType.Entry, index: IndexedData, printer: Printer) {
+        let kind = extract.SyntaxKind(entry.type);
+        let name = extract.TypeName(entry.type);
+        printer
+            .println(`export interface ${name} extends NamedNodeBase {`)
+            .indent()
+            .println(`type: SyntaxType.${kind};`)
+            .forEachInRecord(entry.fields, (field, children) => {
+                let fieldName = field + 'Node';
+                let type = children.types.map(t => extract.TypeExprFromRef(t, index)).join(' | ');
+                if (type === '') {
+                    type = 'UnnamedNode';
                 }
-                type += '[]';
-                fieldName += 's';
-            }
-            let opt = (children.required || children.multiple) ? '' : '?';
-            printer.println(`${fieldName}${opt}: ${type};`);
-        })
-        .deindent()
-        .println('}')
-        .println();
-}
+                if (children.multiple) {
+                    if (children.types.length > 1) {
+                        type = '(' + type + ')';
+                    }
+                    type += '[]';
+                    fieldName += 's';
+                }
+                let opt = (children.required || children.multiple) ? '' : '?';
+                printer.println(`${fieldName}${opt}: ${type};`);
+            })
+            .deindent()
+            .println('}')
+            .println();
+    }
 
-export function UnionFromEntry(entry: NodeType.Entry, index: IndexedData, printer: Printer) {
-    generate.Union(extract.TypeName(entry.type), entry.subtypes!, index, printer);
-}
+    export function UnionFromEntry(entry: NodeType.Entry, index: IndexedData, printer: Printer) {
+        generate.Union(extract.TypeName(entry.type), entry.subtypes!, index, printer);
+    }
 
-export function RootUnion(json: NodeType.Entry[], index: IndexedData, printer: Printer) {
-    let errorType: NodeType.Ref = { type: 'ERROR', named: true, isError: true };
-    generate.Union('SyntaxNode', [...json, errorType], index, printer);
-}
+    export function RootUnion(json: NodeType.Entry[], index: IndexedData, printer: Printer) {
+        let errorType: NodeType.Ref = { type: 'ERROR', named: true, isError: true };
+        generate.Union('SyntaxNode', [...json, errorType], index, printer);
+    }
 
-export function Union(name: string, members: NodeType.Ref[], index: IndexedData, printer: Printer) {
-    printer
-        .println(`export type ${name} = `)
-        .indent()
-        .forEach(members, ref => {
-            printer.println('| ' + extract.TypeExprFromRef(ref, index))
-        })
-        .println(';')
-        .deindent()
-        .println();
-}
+    export function Union(name: string, members: NodeType.Ref[], index: IndexedData, printer: Printer) {
+        printer
+            .println(`export type ${name} = `)
+            .indent()
+            .forEach(members, ref => {
+                printer.println('| ' + extract.TypeExprFromRef(ref, index))
+            })
+            .println(';')
+            .deindent()
+            .println();
+    }
 
-export function ModifiedTreeSitterDts(json: NodeType.Entry[], dtsText: string, printer: Printer) {
-    let text = dtsText
-        .replace(/declare module ['"]tree-sitter['"] {(.*)}/s, (str, p1) => p1.replace(/^  /gm, ''))
-        .replace('export = Parser', '')
-        .replace(/namespace Parser {(.*)}/s, (str, p1) => p1.replace(/^  /gm, ''))
-        .replace(/^\s*(class|interface|namespace)/gm, 'export $1')
-        .replace(/\bexport class\b/g, 'export interface')
-        .replace(/\bParser\.(\w+)\b/g, "$1")
-        .replace('export interface SyntaxNode', 'interface SyntaxNodeBase')
-        .replace(/closest\(\w+:.*\): SyntaxNode \| null;/,
-            'closest<T extends SyntaxType>(types: T | readonly T[]): NamedNode<T> | null;')
-        .replace(/descendantsOfType\(types: [^,]*, (.*)\): Array<SyntaxNode>;/,
-            'descendantsOfType<T extends TypeString>(types: T | readonly T[], $1): NodeOfType<T>[];')
-        .replace(/\n\n\n+/g, '\n\n')
-        .replace(/\n+$/, '')
-    printer.println(text);
-}
+    export function ModifiedTreeSitterDts(json: NodeType.Entry[], dtsText: string, printer: Printer) {
+        let text = dtsText
+            .replace(/declare module ['"]tree-sitter['"] {(.*)}/s, (str, p1) => p1.replace(/^  /gm, ''))
+            .replace('export = Parser', '')
+            .replace(/namespace Parser {(.*)}/s, (str, p1) => p1.replace(/^  /gm, ''))
+            .replace(/^\s*(class|interface|namespace)/gm, 'export $1')
+            .replace(/\bexport class\b/g, 'export interface')
+            .replace(/\bParser\.(\w+)\b/g, "$1")
+            .replace('export interface SyntaxNode', 'interface SyntaxNodeBase')
+            .replace(/closest\(\w+:.*\): SyntaxNode \| null;/,
+                'closest<T extends SyntaxType>(types: T | readonly T[]): NamedNode<T> | null;')
+            .replace(/descendantsOfType\(types: [^,]*, (.*)\): Array<SyntaxNode>;/,
+                'descendantsOfType<T extends TypeString>(types: T | readonly T[], $1): NodeOfType<T>[];')
+            .replace(/\n\n\n+/g, '\n\n')
+            .replace(/\n+$/, '')
+        printer.println(text);
+    }
 
 }
 //#endregion generate
