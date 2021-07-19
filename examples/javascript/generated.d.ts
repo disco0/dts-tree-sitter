@@ -1,5 +1,5 @@
 export interface Parser {
-  parse(input: string | Input, previousTree?: Tree): Tree;
+  parse(input: string | Input, previousTree?: Tree, options?: {bufferSize?: number, includedRanges?: Range[]}): Tree;
   getLanguage(): any;
   setLanguage(language: any): void;
   getLogger(): Logger;
@@ -12,8 +12,10 @@ export type Point = {
 };
 
 export type Range = {
-  start: Point;
-  end: Point;
+  startIndex: number,
+  endIndex: number,
+  startPosition: Point,
+  endPosition: Point
 };
 
 export type Edit = {
@@ -114,8 +116,8 @@ interface NamedNodeBase extends SyntaxNodeBase {
 
 /** An unnamed node with the given type string. */
 export interface UnnamedNode<T extends string = string> extends SyntaxNodeBase {
-  type: T;
-  isNamed: false;
+type: T;
+isNamed: false;
 }
 
 type PickNamedType<Node, T extends string> = Node extends { type: T; isNamed: true } ? Node : never;
@@ -133,8 +135,8 @@ export type NamedNode<T extends SyntaxType = SyntaxType> = PickNamedType<SyntaxN
 export type NodeOfType<T extends string> = PickType<SyntaxNode, T>;
 
 interface TreeCursorOfType<S extends string, T extends SyntaxNodeBase> {
-  nodeType: S;
-  currentNode: T;
+nodeType: S;
+currentNode: T;
 }
 
 type TreeCursorRecord = { [K in TypeString]: TreeCursorOfType<K, NodeOfType<K>> };

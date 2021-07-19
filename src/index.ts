@@ -113,14 +113,6 @@ export namespace NodeType
     }
 }
 
-declare namespace Printer
-{
-    export interface PrintLnOptions
-    {
-        dedent?: boolean
-    }
-}
-
 export class Printer
 {
     private indentation = '';
@@ -178,11 +170,19 @@ export class Printer
         }
         return this;
     }
+}
+
+export namespace Printer
+{
+    export interface PrintLnOptions
+    {
+        dedent?: boolean
+    }
 
     /**
      * Apply string `indentation` as indent to each line of string `str`
      */
-    static IndentLines(str: string, indentation: string): string
+    export function IndentLines(str: string, indentation: string): string
     {
         return str.replace(/^/gm, indentation);
     }
@@ -248,20 +248,24 @@ export interface IndexedData {
     typeNames: Map<string, string>;
 }
 
-export function buildIndex(json: NodeType.Entry[]): IndexedData {
-    let typeNames = new Map<string, string>();
-    for (let entry of json) {
-        if (entry.named) {
-            let name = extract.SyntaxKind(entry.type);
-            typeNames.set(entry.type, name);
-        }
-    }
-    return { typeNames };
-}
 //#region generate
 
+// (Unused part of doc text) [`Entry`]({@link NodeType.Entry})
+/**
+ * Contains all functions operating on `node-types.json`
+ */
 export namespace generate
 {
+    export function Index(json: NodeType.Entry[]): IndexedData {
+        let typeNames = new Map<string, string>();
+        for (let entry of json) {
+            if (entry.named) {
+                let name = extract.SyntaxKind(entry.type);
+                typeNames.set(entry.type, name);
+            }
+        }
+        return { typeNames };
+    }
 
     export function Preamble(json: NodeType.Entry[], printer: Printer) {
         printer.println(`
@@ -290,8 +294,8 @@ export namespace generate
             export type NodeOfType<T extends string> = PickType<SyntaxNode, T>;
 
             interface TreeCursorOfType<S extends string, T extends SyntaxNodeBase> {
-            nodeType: S;
-            currentNode: T;
+              nodeType: S;
+              currentNode: T;
             }
 
             type TreeCursorRecord = { [K in TypeString]: TreeCursorOfType<K, NodeOfType<K>> };
@@ -488,7 +492,7 @@ export function main() {
         process.exit(1);
     }
     let json = JSON.parse(fs.readFileSync(filename, 'utf8')) as NodeType.Entry[];
-    let index = buildIndex(json);
+    let index = generate.Index(json);
     let printer = new Printer();
     generate.ModifiedTreeSitterDts(json, treeSitterDtsText, printer);
     generate.Preamble(json, printer);
